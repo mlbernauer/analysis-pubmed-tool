@@ -1,0 +1,138 @@
+---
+title: Tool for Creating Faculty Bibliographies from PubMed 
+author:
+  - Michael L. Bernauer
+  - Jake L. Nash
+  - Philip J. Kroth
+abstract:
+date: \today
+geometry: margin=0.5in
+---
+
+```{r}
+require('lattice')
+require('dplyr')
+require('tidyr')
+
+# load faculty publications
+p.dat = read.csv('./data/2015.csv') %>%
+    mutate(year=2015) %>%
+    union_all(read.csv('./data/2016.csv') %>%
+              mutate(year=2016))
+
+s.dat = read.csv('./data/self_reported_counts.csv') %>%
+    filter(!is.na(count)) %>%
+    filter(type == 'Article')
+```
+
+```{r}
+# preprocess faculty publication data
+p.cnts = p.dat %>%
+    group_by(department) %>%
+    summarize(est.cnt = n_distinct(url,last_name,first_name,middle_initial)
+             , auth.cnt = n_distinct(last_name, first_name, middle_initial)) %>%
+    mutate(pub.per.auth = est.cnt/auth.cnt)
+
+# aggregate self-reported counts
+s.cnts = s.dat %>%
+    group_by(department) %>%
+    summarize(self.rep.cnt = sum(count))
+```
+
+```{r}
+# join self-reported data with estimates from pubmed
+c.dat = s.cnts %>%
+    left_join(p.cnts
+            , by='department') %>%
+    mutate(est.cnt = ifelse(is.na(est.cnt),0,est.cnt)) %>%
+    mutate(diff = est.cnt - self.rep.cnt) %>%
+    mutate(avg = (est.cnt+self.rep.cnt)/2)
+```
+
+```{r}
+options(knitr.kable.NA='-')
+cap = "This table shows the total number of authors for each department in which
+a publication was found in PubMed."
+t1 = c.dat %>%
+    mutate(department = stringr::str_to_title(department)) %>%
+    rename(Department = department
+           , `Self-Reported`=self.rep.cnt
+           , `Estimated`=est.cnt
+           , `Authors`=auth.cnt
+           , `Pubs/Author`=pub.per.auth) %>%
+    select(Department
+           , `Authors`
+           , `Self-Reported`
+           , `Estimated`
+           , `Pubs/Author`) %>%
+    arrange(-`Authors`) %>%
+    knitr::kable(digits=1, caption = cap)
+
+t1
+
+writeLines(t1,con='./tables/table.md')
+```
+
+```{r}
+pdf(file='./figs/altman-bland.pdf', width=15, height=7.5)
+par(mfrow=c(1,2))
+plot(est.cnt ~ self.rep.cnt
+     , data = c.dat
+     , main = 'Estimated vs Self-Reported Counts'
+     , xlab='Self-Reported Publication Counts'
+     , xlim=c(0,155)
+     , ylim=c(0,155)
+     , pch=19
+     , col='steelblue'
+     , ylab='Estimated Publication Counts')
+abline(a=0,b=1)
+
+plot(diff ~ avg
+     , data = c.dat
+     , main = 'Difference Between Estimated and Self Reported Counts'
+     , xlab = 'Average Publication Count'
+     , ylab = 'Estimated - Self Reported'
+     , col='steelblue'
+     , pch=19
+     , ylim=c(-45,70))
+abline(h=mean(c.dat$diff)-2*sd(c.dat$diff), lty=2, col='black')
+abline(h=mean(c.dat$diff), lty=1, col='black')
+abline(h=mean(c.dat$diff)+2*sd(c.dat$diff), lty=2, col='black')
+text(x=5,y=mean(c.dat$diff)+2+2*sd(c.dat$diff), '+2SD')
+text(x=5,y=mean(c.dat$diff)+2, 'Mean')
+text(x=5,y=mean(c.dat$diff)+2-2*sd(c.dat$diff), '-2SD')
+dev.off()
+```
+
+![](./figs/altman-bland.pdf)
+
+```{r}
+# check for normality
+shapiro.test(c.dat$diff)
+
+# test difference
+t.test(c.dat$diff)
+```
+
+```{r}
+tmp = p.dat %>%
+    unique() %>%
+    group_by(entrezuid) %>%
+    summarize(auth.cnt = n()) %>%
+    count(auth.cnt)
+
+pdf(file='./figs/coauthor.pdf',width=7,height=6)
+p = plot(n ~ auth.cnt
+     , data = tmp
+     , type='b'
+     , pch=19
+     , las=1
+     , ylab='Number of Records'
+     , main = 'Distribution of Coauthorship'
+     , xlab='Coauthor Count'
+     , col='steelblue')
+axis(side=1,at=1:12)
+dev.off()
+```
+
+![Coauthorship distribution](./figs/coauthor.pdf)
